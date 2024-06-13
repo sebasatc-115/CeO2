@@ -1,0 +1,121 @@
+################################################################################## MD for FCC-CeO2 ####################################################################################
+#######################################################################################################################################################################################
+
+################################################################################## Set MD Sim. Var. ###################################################################################
+print "THE START..........." screen yes
+boundary p p p                    # Boundary x y z, P is periodic            
+atom_style full                   # Style of units used for a simulation.
+units metal                       # Time units in ps, 1ps = 1.0E-12 s
+variable THERMO_DAMP equal 0.1    # Temp. Damp
+variable BARO_DAMP equal 0.5      # Pdamp-which pressure is relaxed
+variable TEMPERATURE equal 1000   # Target Temp. for MD  
+timestep 0.002                    # 2 fs = 1 timestep
+
+################################################################################## Read Files #########################################################################################
+read_data CeO2_20.GB       # Unit cell from COD
+variable Ce equal 1        # Lammps file, what type 1 = Ce atom
+variable O equal 2         # Lammps file, what type 2 = O atom
+replicate 1 1 1            # Replicates the cell in x y z
+group Cerium type ${Ce}    # Group Cerium atoms
+group Oxygen type ${O}     # Group Oxygen atoms
+
+################################################################################## Building System ####################################################################################
+set type $O charge -1.1104                                       # Set Oxygen Charge
+set type ${Ce} charge 2.2208                                     # Set Cerium Charge
+kspace_style pppm 1.0e-5
+variable SR_CUTOFF equal 11.0
+pair_style hybrid/overlay coul/long ${SR_CUTOFF} eam/alloy
+pair_coeff   *    *    coul/long
+pair_coeff   *    *    eam/alloy CeThUNpPuAmCmO.eam.alloy Ce O
+thermo_style custom step time dt temp etotal enthalpy press 
+thermo 1000                                                     # How often data is stored
+thermo_modify flush yes
+
+############################################################################# Displace atoms and delete overlapping atoms #############################################################
+region upper block INF INF INF INF 0.5 INF units lattice
+region lower block INF INF INF INF INF 0.5 units lattice
+group upper region upper
+group lower region lower
+
+displace_atoms upper move 0 0 0 units lattice 
+delete_atoms overlap 1.6394 lower upper
+
+# Delete overlapping atoms within the lower group
+delete_atoms overlap 1.6394 lower lower
+
+# Delete overlapping atoms within the upper group
+delete_atoms overlap 1.6394 upper upper
+
+# Ensure atoms IDs are consecutive after deletion
+reset_atom_ids
+
+#NOTE# 1.6387 = If the distance between two atoms is less than 70% of the first nearest neighbor distance after the rotation [1]. 
+
+
+############################################################################## Perform minimization ###################################################################################
+fix boxrelax_fix all box/relax aniso 0.0 vmax 0.001  # step up
+thermo 1000                                          # Data collc. Step
+thermo_style custom step temp press etotal           # Data colic.
+min_style sd
+min_modify line quadratic dmax 0.05
+minimize 1.0e-25 1.0e-25 50000 50000
+unfix boxrelax_fix
+
+############################################################################## Equilibration @300 K, NPT @O bars ######################################################################
+velocity all create 300 67456
+fix npt_fix all npt temp 300 300 ${THERMO_DAMP} aniso 0 0 ${BARO_DAMP}
+run 5000
+unfix npt_fix
+
+############################################################################## Temperature ramp to desired ############################################################################
+fix npt_fix all npt temp 300 ${TEMPERATURE} ${THERMO_DAMP} aniso 0 0 ${BARO_DAMP}
+run 20000
+unfix npt_fix
+
+############################################################################# Equilibrate NPT zero Press @ target temp ############################################################### 
+fix npt_fix all npt temp ${TEMPERATURE} ${TEMPERATURE} ${THERMO_DAMP} aniso 0 0 ${BARO_DAMP}
+run 10000                                                                                            
+unfix npt_fix                                                                                        
+
+
+################################################################################ Production run #######################################################################################
+fix npt_fix all npt temp ${TEMPERATURE} ${TEMPERATURE} ${THERMO_DAMP} aniso 0 0 ${BARO_DAMP}
+thermo 1000                                                                                          
+
+################################################################################ MSD for CeO2 #########################################################################################
+group Cerium type ${Ce}
+group Oxygen type ${O}
+compute Ce_comp Cerium msd com yes
+compute O_comp Oxygen msd com yes
+compute msdall all msd
+variable Ce_MSD equal c_Ce_comp[4]
+variable Ce_MSx equal c_Ce_comp[1]
+variable Ce_MSy equal c_Ce_comp[2]
+variable Ce_MSz equal c_Ce_comp[3]
+variable O_MSD equal c_O_comp[4]
+variable O_MSx equal c_O_comp[1]
+variable O_MSy equal c_O_comp[2]
+variable O_MSz equal c_O_comp[3]
+variable sim_time equal "time"
+variable CeO_MSD equal c_msdall[4]
+
+fix MSDlog all print 1000 "${sim_time} ${Ce_MSD} ${Ce_MSx} ${Ce_MSy} ${Ce_MSz} ${O_MSD} ${O_MSx} ${O_MSy} ${O_MSz} ${CeO_MSD}" append MSDlog.txt screen no 
+thermo_style custom step time temp etotal press
+
+################################################################################ X Y Z outpur for ovito ###############################################################################
+dump cfg_dump all custom 1000 CeO2.XDATCAR element x y z
+dump_modify cfg_dump sort id element Ce O
+
+
+################################################################################ Extended production run ##############################################################################
+run 500000
+write_restart restart_1.lmpstart
+run 500000
+write_restart restart_2.lmpstart
+
+#######################################################################################################################################################################################
+#                                                                                   Work Cited
+#
+#[1]“Molecular Dynamics Studies of Grain Boundary Mobility and Anisotropy in BCC γ-Uranium.” Journal of Nuclear Materials, North-Holland, 21 Apr. 2022, www.sciencedirect.com/science/article/pii/S002231152200232X.
+#
+######################################################################################################################################################################################################################################################################## END #################################################################################################
